@@ -1,0 +1,6 @@
+scenario,policy,failed,failed_control,exposed,exposed_bits,otp_share,otp_share_control,otp_share_state,otp_share_market,otp_weighted,aes_share,delivery_ratio,key_util,wasted_kbit,empty_s,min_time_left_s,stale_s,min_stock,react_s,recover_s,switches_to_aes,switches_to_otp,oscillations,accepted_kbit,rejected_kbit
+combined_stress,otp_only,341498.4667,11988.4333,0.0,0.0,0.407,0.8333,0.4828,0.0042,0.4859,0.0,0.407,1.0033,0.0,3590.9667,0.0031,0.0,0.0422,nan,0.0,0.0,0.0,0.0,29905.3061,5892.8229
+combined_stress,aes_only,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0005,29489.9461,0.0,10.4132,0.0,100000.0,0.0,nan,0.0,0.0,0.0,29905.3061,5892.8229
+combined_stress,fixed,42643.3,0.0,0.0,0.0,0.4068,0.7883,0.4921,0.0026,0.4846,0.5191,0.926,1.0033,0.0,2074.3333,0.066,497.4,0.084,0.0,1153.0,956.5333,955.3,1841.3333,29905.3061,5892.8229
+combined_stress,qian,258643.8,11987.1,165708.9,10605369.6,0.2632,0.7317,0.2738,0.0024,0.3197,0.0,0.5509,1.0033,0.0,3584.2667,0.0014,0.0,0.0228,0.0,nan,0.0,0.0,493.9,29905.3061,5892.8229
+combined_stress,ours,0.0,0.0,0.0,0.0,0.4017,0.8671,0.4693,0.0,0.4815,0.5983,1.0,0.9908,0.0,0.0,2.2751,0.0,47556.8168,0.0,nan,126.0333,126.6,156.1667,29905.3061,5892.8229

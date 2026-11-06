@@ -26,8 +26,13 @@ from simulator import simulate
 RESULTS = Path(__file__).parent / "results"
 TEST_SEEDS = range(0, 30)
 TUNE_SEEDS = range(100, 120)
-METRICS = ("failed", "failed_control", "exposed", "otp_share", "otp_share_control", "otp_weighted", "aes_share",
-           "key_util", "wasted_kbit", "empty_s", "react_s", "recover_s")
+METRICS = ("failed", "failed_control", "exposed", "exposed_bits",
+           "otp_share", "otp_share_control", "otp_share_state", "otp_share_market",
+           "otp_weighted", "aes_share", "delivery_ratio",
+           "key_util", "wasted_kbit", "empty_s", "min_time_left_s",
+           "stale_s", "min_stock", "react_s", "recover_s",
+           "switches_to_aes", "switches_to_otp", "oscillations",
+           "accepted_kbit", "rejected_kbit")
 DISTANCES = (5, 10, 20, 30, 40)
 RESERVES = (5, 10, 20, 30, 60, 100, 200, 400, 800)
 SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)
@@ -144,17 +149,23 @@ def finish(fig, name):
 # ---------------------------------------------------------------- charts
 
 def chart_distance(rows):
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
-    panels = [("failed", "Failed messages per run", True), ("exposed", "Exposed messages per run (key reused)", True),
-              ("otp_share_control", "Control messages protected by OTP", False),
-              ("wasted_kbit", "Key bits wasted (kbit)", False)]
+    fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex=True)
+    panels = [
+        ("failed",            "Failed messages per run",                       True),
+        ("exposed",           "Exposed messages per run (key reused)",          True),
+        ("otp_share_control", "Control messages on OTP",                       False),
+        ("otp_share_state",   "State-estimation messages on OTP",               False),
+        ("otp_share_market",  "Market messages on OTP",                         False),
+        ("wasted_kbit",       "Key bits wasted (kbit)",                         False),
+    ]
     for ax, (key, title, symlog) in zip(axes.flat, panels):
         policy_lines(ax, rows, "km", key, symlog)
         ax.set_title(title)
     for ax in axes[1]:
         ax.set_xlabel("Fibre length (km)")
         ax.set_xticks(DISTANCES)
-    axes[1][0].set_ylim(0, 1.05)
+    for ax in axes.flat[2:5]:                 # OTP-share panels share the [0,1] scale
+        ax.set_ylim(0, 1.05)
     fig.suptitle("Same traffic and a 300 s attack in every run. Policies at zero share the zero line.",
                  y=0.0, va="top", color=INK2, fontsize=9)
     legend_on_top(fig, axes[0][0])
@@ -163,12 +174,18 @@ def chart_distance(rows):
 
 
 def chart_attack(rows):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), sharex=True)
+    fig, axes = plt.subplots(1, 4, figsize=(16, 3.8), sharex=True)
     policy_lines(axes[0], rows, "attack_len", "failed", symlog=True)
     axes[0].set_title("Failed messages per run")
     policy_lines(axes[1], rows, "attack_len", "otp_share_control")
-    axes[1].set_title("Control messages protected by OTP")
+    axes[1].set_title("Control messages on OTP")
     axes[1].set_ylim(0, 1.05)
+    policy_lines(axes[2], rows, "attack_len", "otp_share_state")
+    axes[2].set_title("State-estimation messages on OTP")
+    axes[2].set_ylim(0, 1.05)
+    policy_lines(axes[3], rows, "attack_len", "otp_share_market")
+    axes[3].set_title("Market messages on OTP")
+    axes[3].set_ylim(0, 1.05)
     for ax in axes:
         ax.set_xlabel("Attack length (s), 30 km fibre")
     legend_on_top(fig, axes[0])
@@ -252,6 +269,41 @@ def draw_all():
     chart_robustness(load_csv("robustness.csv"))
     chart_timeline(replace(Params(), km=30))
 
+    # Generate Figures 1 through 16 requested in Section 12
+    import plots
+    try:
+        dist_rows = load_csv("distance.csv")
+        att_rows = load_csv("attack_length.csv")
+        traf_rows = load_csv("traffic.csv")
+        wind_rows = load_csv("wind.csv")
+        prio_rows = load_csv("priority.csv")
+        fixed_rows = load_csv("fixed_reserve_sweep.csv")
+        scale_rows = load_csv("safe_scale_sweep.csv")
+
+        plots.fig1_inventory_timeline(replace(Params(), km=30))
+        plots.fig2_usage_distribution(dist_rows)
+        plots.fig3_depletion_time(dist_rows)
+        plots.fig4_delivery_ratio(dist_rows)
+        plots.fig5_high_priority_delivery(dist_rows)
+        plots.fig6_exposed_messages(dist_rows)
+        plots.fig7_rates_over_time(replace(Params(), km=30))
+        plots.fig8_switching_timeline(replace(Params(), km=30))
+        plots.fig9_attack_lifecycle(replace(Params(), km=30))
+        plots.fig10_distance_performance(dist_rows)
+        plots.fig11_traffic_performance(traf_rows)
+        plots.fig12_fluctuation_performance(wind_rows)
+        plots.fig13_attack_performance(att_rows)
+        plots.fig14_priority_sensitivity(prio_rows)
+        try:
+            stress_rows = load_csv("stress.csv")
+            plots.fig15_combined_stress(stress_rows)
+        except Exception:
+            pass
+        plots.fig16_tuning_sensitivity(fixed_rows, scale_rows)
+        print("Figures 1 through 16 successfully generated in results/")
+    except Exception as e:
+        print(f"Notice: Plot generation helper exception: {e}")
+
 
 # ---------------------------------------------------------------- experiments
 
@@ -327,6 +379,30 @@ def run_all():
 
     print("robustness to changed traffic and wind ...")
     run_robustness()
+
+    print("combined stress test (Scenario 6) ...")
+    stress_p = replace(base, km=30, traffic_scale=2.0, wind_sigma=0.2,
+                       attack_start=600, attack_len=600, attack_strength=1.0)
+    stress_rows = []
+    for name in NAMES:
+        stress_rows.append({"scenario": "combined_stress", "policy": name, **evaluate(name, stress_p, TEST_SEEDS)})
+    save_csv("stress.csv", stress_rows)
+
+    print("Qian reuse vs no-reuse comparison ...")
+    qian_rows = []
+    for km in (10, 20, 30, 40):
+        p = replace(Params(), km=km)
+        for name in ("qian", "qian_noreuse"):
+            qian_rows.append({"km": km, "policy": name, **evaluate(name, p, TEST_SEEDS)})
+    save_csv("qian_comparison.csv", qian_rows)
+
+    print("generation profile comparison (Scenario 3) ...")
+    prof_rows = []
+    for prof in ("stable", "wind", "declining", "intermittent"):
+        p = replace(base, gen_profile=prof)
+        for name in ("ours", "fixed", "otp_only", "aes_only"):
+            prof_rows.append({"gen_profile": prof, "policy": name, **evaluate(name, p, TEST_SEEDS)})
+    save_csv("fluctuation.csv", prof_rows)
 
     for r in tuned:
         print(f"{r['km']:>3} km  {r['variant']:42s} failed {r['failed']:>8.1f}  exposed {r['exposed']:>6.1f}  "
