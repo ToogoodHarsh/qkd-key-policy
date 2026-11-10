@@ -61,39 +61,9 @@ def under_attack(p, t):
     return p.attack_start <= t < p.attack_start + p.attack_len
 
 
-def profile_factor(p, t):
-    """Multiplier for key generation based on the configured profile."""
-    prof = getattr(p, "gen_profile", "wind")
-    if prof == "stable":
-        return 1.0
-    elif prof == "declining":
-        # Linear decline: decreases down to 40% of nominal over simulation window
-        return max(0.2, 1.0 - 0.6 * (t / max(1, p.seconds)))
-    elif prof == "intermittent":
-        # 5 minutes nominal (300 s), 1 minute degraded (60 s)
-        return 1.0 if (t % 360) < 300 else 0.05
-    return 1.0
-
-
-def generation_details(p, rng):
-    """Return accepted key supply series and rejected/discarded key bits series."""
-    base = p.supply_override if p.supply_override is not None else secret_rate(p)
-    attacked = 0.0 if p.supply_override is not None else secret_rate(p, p.attack_strength)
-    prof = getattr(p, "gen_profile", "wind")
-    wind = wind_factors(p, rng) if prof in ("wind", "declining") else np.ones(p.seconds)
-    
-    supply = []
-    rejected = []
-    for t in range(p.seconds):
-        pf = profile_factor(p, t)
-        nom = base * wind[t] * pf
-        act = (attacked if under_attack(p, t) else base) * wind[t] * pf
-        supply.append(act)
-        rejected.append(max(0.0, nom - act))
-    return supply, rejected
-
-
 def supply_series(p, rng):
     """Key bits generated in each second."""
-    supply, _ = generation_details(p, rng)
-    return supply
+    base = p.supply_override if p.supply_override is not None else secret_rate(p)
+    attacked = 0.0 if p.supply_override is not None else secret_rate(p, p.attack_strength)
+    wind = wind_factors(p, rng)
+    return [(attacked if under_attack(p, t) else base) * wind[t] for t in range(p.seconds)]

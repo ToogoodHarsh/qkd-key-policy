@@ -33,25 +33,3 @@ def test_supply_stops_during_the_attack_only():
     s = supply_series(p, np.random.default_rng(0))
     assert all(v == 0 for v in s[100:150])
     assert s[99] > 0 and s[150] > 0
-
-
-def test_generation_profiles():
-    """Spec Section 6 & 7: Stable, declining, and intermittent profiles."""
-    rng = np.random.default_rng(42)
-    p_stable = replace(Params(), gen_profile="stable", seconds=600, attack_len=0)
-    p_declining = replace(Params(), gen_profile="declining", seconds=600, attack_len=0)
-    p_intermittent = replace(Params(), gen_profile="intermittent", seconds=600, attack_len=0)
-
-    s_stable = supply_series(p_stable, rng)
-    s_declining = supply_series(p_declining, rng)
-    s_intermittent = supply_series(p_intermittent, rng)
-
-    # Stable has no decay or wind
-    assert np.allclose(s_stable, s_stable[0])
-
-    # Declining key rate at end is lower than at beginning
-    assert np.mean(s_declining[-50:]) < np.mean(s_declining[:50])
-
-    # Intermittent has lower rates during degraded period (e.g. at t=310 vs t=100)
-    assert s_intermittent[310] < s_intermittent[100]
-

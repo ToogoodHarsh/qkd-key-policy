@@ -10,12 +10,9 @@ class MsgClass:
     safe_s: float      # seconds of key stock the rate-aware rule keeps for this class
 
 
-# Traffic ratio 1 : 5 : 2 as stated in our project spec (Qian p. 8 gives class structure;
-# NOTE: Qian's raw traffic volume puts market highest (~60-65%), control lowest (~10-12%),
-# but we follow the ratio stated in our project document and match Qian's priority order.)
-CONTROL = MsgClass("control", 10, 0.947, 20)    # frequency control
-STATE   = MsgClass("state",   50, 0.788, 60)    # state estimation
-MARKET  = MsgClass("market",  20, 0.329, 120)   # power market
+CONTROL = MsgClass("control", 10, 0.947, 20)    # frequency control; traffic ratio 1:5:2 (Qian p. 8)
+STATE = MsgClass("state", 50, 0.788, 60)        # state estimation
+MARKET = MsgClass("market", 20, 0.329, 120)     # power market
 
 
 def reversed_priority():
@@ -27,24 +24,21 @@ def reversed_priority():
 class Params:
     # --- QKD link: Tang Eq. (4), (5), (6), (11), (15) for the signal intensity, simplified (asymptotic)
     km: float = 20.0                  # fibre length
-    alpha_db_km: float = 0.2          # fibre loss dB/km at 1550 nm (Tang p. 4, Zheng p. 9)
+    alpha_db_km: float = 0.2          # fibre loss (Tang p. 4, Zheng p. 9)
     rep_rate: float = 2e6             # pulses per second (Qian p. 4). Tang's laser runs at 4e7 (Table I), but our
                                       # formula has no finite-key or decoy-state penalty; 2e6 keeps the key rate
-                                      # at Tang's order of about 1-4 kbit/s at 50 km (see tests)
-
-    # --- Hardware parameters: Tang Table I (verified against paper via browser search)
+                                      # at Tang's order of about 1-3 kbit/s at 50 km (see tests)
     mu: float = 0.4                   # signal intensity k1 (Tang Table I)
-    eta_det: float = 0.11             # Bob's detector efficiency; Tang Table I: 0.11-0.14, using lower bound
-    dark_count: float = 1.7e-6        # dark count probability p_dc (Tang Table I: 1.7e-6 per detection gate)
-    e_mis: float = 5e-4               # optical misalignment error rate (Tang Table I: 5e-4 to 9e-4)
-    after_pulse: float = 1e-3         # after-pulse probability p_ap (Tang Table I: 1e-4 to 1e-3, using upper end)
-    ec_eff: float = 1.16              # error-correction efficiency f_ec (Tang Table I)
-    qber_limit: float = 0.11          # BB84 security limit; above it keys are discarded (Rath p. 9)
+    eta_det: float = 0.1              # Bob's detector efficiency (Tang Table I)
+    dark_count: float = 6e-7          # dark count probability p_dc (Tang Table I)
+    e_mis: float = 5e-4               # optical error rate (Tang Table I)
+    after_pulse: float = 4e-2         # after-pulse probability p_ap (Tang Table I)
+    ec_eff: float = 1.16              # error-correction efficiency (Tang Table I)
+    qber_limit: float = 0.11          # BB84 limit; above it the keys are discarded (Rath p. 9)
 
-    # --- key-rate swings and profile (Alshowkan p. 9: aerial fibre, wind)
+    # --- key-rate swings (Alshowkan p. 9: aerial fibre, wind)
     wind_sigma: float = 0.10          # relative size of the swings (ASSUMED)
     wind_rho: float = 0.95            # how slowly they change from second to second (ASSUMED)
-    gen_profile: str = "wind"         # "wind", "stable", "declining", or "intermittent"
 
     # --- attack on key generation (intercept-resend adds 0.25 * strength to the QBER)
     attack_start: int = 1200
@@ -55,26 +49,22 @@ class Params:
     classes: tuple = (CONTROL, STATE, MARKET)
     traffic_scale: float = 1.0
     bursts: tuple = ()                # (start_s, length_s, factor)
-    payload_bits: int = 64            # Tang p. 8: 64-bit control packets
-    tag_bits: int = 64                # one-time authentication tag (ASSUMED; Alshowkan uses 128-bit GMAC)
-    nonce_bits: int = 96              # standard 96-bit AES-GCM nonce for classical overhead tracking
-    gcm_tag_bits: int = 128           # standard 128-bit AES-GCM authentication tag
+    payload_bits: int = 64            # Tang p. 8
+    tag_bits: int = 64                # one-time authentication tag (ASSUMED)
 
     # --- key tank and AES-256 session key
     capacity: float = 500_000         # bits (ASSUMED)
     initial_stock: float = 100_000    # bits (ASSUMED)
-    aes_key_bits: int = 256           # Alshowkan p. 7: AES-256 session key
+    aes_key_bits: int = 256
     rekey_s: int = 60                 # how long one AES key is used (ASSUMED)
-    max_msgs_per_aes_key: int = 2**32 # NIST SP 800-38D block limit per key
     floor_margin: int = 256           # extra bits the rate-aware rule always keeps
-    key_unit_bits: int = 256          # size of "one key" for the 30-key reserve (Alshowkan: 256-bit keys)
+    key_unit_bits: int = 256          # size of "one key" for the 30-key reserve (ASSUMED)
 
     # --- policy settings
-    fixed_reserve_keys: int = 30      # Alshowkan p. 9: 30-key reserve (30 × 256 = 7,680 bits)
-    smooth_s: float = 20.0            # averaging time for supply and demand (ASSUMED)
+    fixed_reserve_keys: int = 30      # Alshowkan p. 9
+    smooth_s: float = 20.0            # averaging time for supply and demand
     safe_scale: float = 1.0           # multiplies every class's safe time (tuned in experiments)
     hysteresis: float = 1.5           # stay on AES until time_left is this much above the limit
-    min_dwell_s: int = 0              # minimum seconds in AES before returning to OTP
     spill_frac: float = 0.9           # tank this full: keys would overflow, so spend them on OTP
 
     # --- run

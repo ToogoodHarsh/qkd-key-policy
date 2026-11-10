@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en" data-theme="__THEME__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QKD key tanks</title>
+<style>
+  :root {
+    --bg: #fcfcfb; --panel: #ffffff; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781; --grid: #e1e0d9;
+    --otp: #0ca30c; --aes: #2a78d6; --shared: #ec835a; --fail: #d03b3b; --water: #86b6ef; --waterTop: #2a78d6;
+    --basisZ: #2a78d6; --basisX: #6250d6; --ours: #2a78d6; --border: #c3c2b7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1a1a19; --panel: #242423; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781; --grid: #2c2c2a;
+      --otp: #0ca30c; --aes: #3987e5; --shared: #ec835a; --fail: #e66767; --water: #1c5cab; --waterTop: #3987e5;
+      --basisZ: #3987e5; --basisX: #9085e9; --ours: #3987e5; --border: #383835;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1a19; --panel: #242423; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781; --grid: #2c2c2a;
+    --otp: #0ca30c; --aes: #3987e5; --shared: #ec835a; --fail: #e66767; --water: #1c5cab; --waterTop: #3987e5;
+    --basisZ: #3987e5; --basisX: #9085e9; --ours: #3987e5; --border: #383835;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+               font-family: "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 14px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 2px 8px; }
+  button, select { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+                   background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--aes); border-color: var(--aes); color: #fff; min-width: 92px; }
+  button:disabled { opacity: .45; cursor: default; }
+  #clock { font-variant-numeric: tabular-nums; font-weight: 600; margin-left: 6px; }
+  #status { margin-left: auto; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
+  #status.alert { color: #fff; background: var(--fail); }
+  #status.ok { color: var(--ink2); }
+  canvas { display: block; width: 100%; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--ink2); font-size: 13px; padding: 6px 2px 0; }
+  .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .ring { display: inline-block; width: 14px; height: 9px; border: 3px solid var(--fail); border-radius: 3px;
+          margin-right: 6px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="play" class="primary">&#9654; Play</button>
+  <button id="restart">&#10226; Restart</button>
+  <button id="jump">&#9889; Jump to attack</button>
+  <label>Speed
+    <select id="speed">
+      <option value="1" selected>1x (real time)</option>
+      <option value="2">2x</option>
+      <option value="5">5x</option>
+      <option value="10">10x</option>
+      <option value="30">30x</option>
+      <option value="60">60x</option>
+      <option value="120">120x</option>
+    </select>
+  </label>
+  <span id="clock">t = 0 s</span>
+  <span id="status" class="ok"></span>
+</div>
+<canvas id="cv" aria-label="Animated key tanks of the five policies"></canvas>
+<div class="legend">
+  <span><b>Dot of a class:</b></span>
+  <span><span class="dot" style="background:var(--otp)"></span>One-Time Pad now</span>
+  <span><span class="dot" style="background:var(--aes)"></span>AES-256 now (fresh QKD key every 60 s)</span>
+  <span><span class="dot" style="background:var(--shared)"></span>Key reused (exposed)</span>
+  <span><span class="ring"></span>Messages failing this second</span>
+  <span><span class="dot" style="background:var(--basisZ)"></span><span class="dot" style="background:var(--basisX)"></span>Photons in two bases</span>
+</div>
+<script>
+const D = __DATA__;
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const H = 640;
+let W = 800;
+const tok = {};
+
+function readTokens() {
+  const s = getComputedStyle(document.documentElement);
+  for (const k of ["bg", "panel", "ink", "ink2", "muted", "grid", "otp", "aes", "shared", "fail", "water",
+                   "waterTop", "basisZ", "basisX", "ours", "border"]) {
+    tok[k] = s.getPropertyValue("--" + k).trim();
+  }
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = Math.max(640, cv.clientWidth);
+  cv.width = Math.round(W * dpr);
+  cv.height = Math.round(H * dpr);
+  cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+readTokens();
+resize();
+window.addEventListener("resize", resize);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readTokens);
+
+// ------------------------------------------------------------------ state
+let simT = D.startAt || 0;
+let playing = false;
+let speed = 1;
+let last = performance.now();
+let photons = [];
+let spawnDebt = 0;
+const hasAttack = D.attackStart >= 0;
+
+const fmt = n => Math.round(n).toLocaleString("en-US");
+const tNow = () => Math.min(D.T - 1, Math.max(0, Math.floor(simT)));
+const inAttack = t => hasAttack && t >= D.attackStart && t < D.attackEnd;
+const mmss = s => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+// ------------------------------------------------------------------ geometry
+function linkGeom() {
+  const ax = 20, aw = 132, bw = 132;
+  return { ax, aw, bx: W - 20 - bw, bw, y: 62, eveX: W / 2 };
+}
+
+// ------------------------------------------------------------------ photons (illustration of the quantum link)
+function newPhoton(x) {
+  return { x, basis: Math.random() < 0.5 ? "Z" : "X", checked: false, hit: false };
+}
+
+function prefill() {
+  const g = linkGeom();
+  photons = [];
+  for (let i = 0; i < 14; i++) {
+    const p = newPhoton(g.ax + g.aw + (i + 0.5) * (g.bx - g.ax - g.aw) / 14);
+    if (inAttack(tNow()) && p.x > g.eveX) { p.checked = true; p.hit = Math.random() < D.strength; }
+    photons.push(p);
+  }
+}
+
+function stepPhotons(dt, t) {
+  if (!playing) return;
+  const g = linkGeom();
+  const x0 = g.ax + g.aw, x1 = g.bx, v = (x1 - x0) / 1.8;
+  spawnDebt += dt * 8;
+  while (spawnDebt >= 1) { photons.push(newPhoton(x0)); spawnDebt -= 1; }
+  for (const p of photons) {
+    p.x += v * dt;
+    if (!p.checked && p.x >= g.eveX) {
+      p.checked = true;
+      p.hit = inAttack(t) && Math.random() < D.strength;
+    }
+  }
+  photons = photons.filter(p => p.x < x1);
+}
+
+// ------------------------------------------------------------------ drawing helpers
+function rrect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function text(s, x, y, { size = 13, weight = 400, color = tok.ink, align = "left", base = "alphabetic" } = {}) {
+  ctx.font = `${weight} ${size}px "Segoe UI", system-ui, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = base;
+  ctx.fillText(s, x, y);
+}
+
+function pill(s, cx, cy, color) {
+  ctx.font = `700 12px "Segoe UI", system-ui, sans-serif`;
+  const w = ctx.measureText(s).width + 16;
+  rrect(cx - w / 2, cy - 11, w, 22, 11);
+  ctx.fillStyle = color;
+  ctx.fill();
+  text(s, cx, cy + 1, { size: 12, weight: 700, color: "#fff", align: "center", base: "middle" });
+}
+
+// ------------------------------------------------------------------ the quantum link strip
+function drawLink(t) {
+  const g = linkGeom();
+  const attack = inAttack(t);
+  for (const [x, w, title, sub] of [[g.ax, g.aw, "Alice", "control centre"], [g.bx, g.bw, "Bob", "substation"]]) {
+    rrect(x, g.y - 30, w, 60, 8);
+    ctx.fillStyle = tok.panel; ctx.fill();
+    ctx.strokeStyle = tok.border; ctx.lineWidth = 1.5; ctx.stroke();
+    text(title, x + w / 2, g.y - 4, { size: 15, weight: 700, align: "center" });
+    text(sub, x + w / 2, g.y + 15, { size: 12, color: tok.ink2, align: "center" });
+  }
+  // fibre
+  ctx.strokeStyle = tok.grid; ctx.lineWidth = 6; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(g.ax + g.aw, g.y); ctx.lineTo(g.bx, g.y); ctx.stroke();
+  text(`${D.km} km optical fibre`, g.ax + g.aw + 10, g.y - 14, { size: 12, color: tok.muted });
+  // photons
+  for (const p of photons) {
+    ctx.beginPath();
+    ctx.arc(p.x, g.y, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = p.hit ? tok.fail : (p.basis === "Z" ? tok.basisZ : tok.basisX);
+    ctx.fill();
+  }
+  // Eve
+  if (attack) {
+    ctx.beginPath(); ctx.arc(g.eveX, g.y - 2, 20, 0, Math.PI * 2);
+    ctx.fillStyle = tok.fail; ctx.fill();
+    text("Eve", g.eveX, g.y - 1, { size: 13, weight: 700, color: "#fff", align: "center", base: "middle" });
+    text("eavesdropper", g.eveX, g.y - 30, { size: 12, weight: 600, color: tok.fail, align: "center" });
+  }
+  // key rate and QBER gauge
+  const rate = D.supply[t];
+  const qber = attack ? D.qberAttack : D.qberBase;
+  const discarded = attack && D.qberAttack >= D.limit;
+  const keyText = discarded ? "New secret keys: 0 bit/s (keys discarded)" : `New secret keys: ${fmt(rate)} bit/s`;
+  text(keyText, g.ax, g.y + 58, { size: 13, weight: 600, color: discarded ? tok.fail : tok.ink });
+  const gx = W / 2 - 40, gw = Math.min(300, W - gx - 30), gy = g.y + 46, maxQ = 0.3;
+  text("QBER", gx - 10, gy + 8, { size: 13, weight: 600, align: "right", base: "middle" });
+  rrect(gx, gy, gw, 16, 4); ctx.fillStyle = tok.grid; ctx.fill();
+  const qw = Math.max(3, gw * Math.min(qber, maxQ) / maxQ);
+  rrect(gx, gy, qw, 16, 4); ctx.fillStyle = qber >= D.limit ? tok.fail : tok.otp; ctx.fill();
+  const lx = gx + gw * D.limit / maxQ;
+  ctx.strokeStyle = tok.ink; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(lx, gy - 4); ctx.lineTo(lx, gy + 20); ctx.stroke();
+  text(`${(qber * 100).toFixed(1)}%`, gx + gw + 8, gy + 8, { size: 13, weight: 700, base: "middle",
+       color: qber >= D.limit ? tok.fail : tok.ink });
+  text("11% limit", lx, gy + 33, { size: 11, color: tok.ink2, align: "center" });
+}
+
+// ------------------------------------------------------------------ the five tanks
+const CLASS_LABEL = { control: "Control", state: "State", market: "Market" };
+const MODE_COLOR = () => [tok.otp, tok.aes, tok.shared];
+
+function drawTank(P, t, x0, colW, top) {
+  const tw = Math.min(104, colW * 0.46), th = 170;
+  const cx = x0 + colW / 2, tx = cx - tw / 2, ty = top + 40;
+  const ours = P.key === "ours";
+  if (ours) {
+    rrect(x0 + 4, top - 6, colW - 8, 392, 10);                   // frame around our rule's column
+    ctx.fillStyle = tok.panel; ctx.fill();
+    ctx.strokeStyle = tok.ours; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  text(P.name, cx, top + 14, { size: 14, weight: 700, color: ours ? tok.ours : tok.ink, align: "center" });
+  const stock = P.stock[t];
+  text(`${fmt(stock / 1000)} kbit`, cx, top + 32, { size: 12, color: tok.ink2, align: "center" });
+  // water
+  const frac = Math.max(0, Math.min(1, stock / D.capacity));
+  const wh = th * frac;
+  ctx.save();
+  rrect(tx, ty, tw, th, 8); ctx.clip();
+  ctx.fillStyle = tok.panel; ctx.fillRect(tx, ty, tw, th);
+  ctx.fillStyle = tok.water; ctx.fillRect(tx, ty + th - wh, tw, wh);
+  if (wh > 1) { ctx.fillStyle = tok.waterTop; ctx.fillRect(tx, ty + th - wh, tw, 3); }
+  ctx.restore();
+  const failing = t > 0 && P.failed[t] > P.failed[t - 1];
+  const exposing = t > 0 && P.exposed[t] > P.exposed[t - 1];
+  rrect(tx, ty, tw, th, 8);
+  ctx.strokeStyle = failing ? tok.fail : tok.border;
+  ctx.lineWidth = failing ? 5 : 1.5;
+  ctx.stroke();
+  if (stock < 1000) text("EMPTY", cx, ty + th - 12, { size: 12, weight: 700, color: tok.fail, align: "center" });
+  if (failing) pill("MESSAGES FAILING", cx, ty + th / 2, tok.fail);
+  else if (exposing) pill("KEY REUSED", cx, ty + th / 2, tok.shared);
+  // one row per message class: the dot is the protection it uses right now, the number is the share of its
+  // messages sent with OTP so far
+  const colors = MODE_COLOR();
+  const rw = Math.min(colW - 22, 186), rx = cx - rw / 2, hy = ty + th + 22;
+  text("class now", rx, hy, { size: 11, color: tok.muted });
+  text("sent with OTP", rx + rw, hy, { size: 11, color: tok.muted, align: "right" });
+  D.classes.forEach((name, j) => {
+    const ry = hy + 22 + j * 24;
+    ctx.beginPath(); ctx.arc(rx + 8, ry - 4, 8, 0, Math.PI * 2);
+    ctx.fillStyle = colors[P.modes[name][t]]; ctx.fill();
+    text(CLASS_LABEL[name] || name, rx + 24, ry, { size: 13, weight: 600 });
+    const share = P.sent[name][t] ? P.otp[name][t] / P.sent[name][t] : 1;
+    text(`${(share * 100).toFixed(0)}%`, rx + rw, ry, { size: 14, weight: 700, align: "right" });
+  });
+  // running totals of failed and exposed messages
+  const cy = hy + 22 + D.classes.length * 24 + 16;
+  const failed = P.failed[t], exposed = P.exposed[t];
+  text(`Failed  ${fmt(failed)}`, cx, cy, { size: 13, weight: 700, color: failed ? tok.fail : tok.ink, align: "center" });
+  text(`Exposed  ${fmt(exposed)}`, cx, cy + 20, { size: 13, weight: 700, color: exposed ? tok.shared : tok.ink, align: "center" });
+}
+
+// ------------------------------------------------------------------ timeline scrubber
+function scrubGeom() { return { x0: 24, x1: W - 24, y: H - 34 }; }
+
+function drawScrubber(t) {
+  const s = scrubGeom(), w = s.x1 - s.x0;
+  rrect(s.x0, s.y, w, 8, 4); ctx.fillStyle = tok.grid; ctx.fill();
+  if (hasAttack) {
+    const a0 = s.x0 + w * D.attackStart / D.T, a1 = s.x0 + w * D.attackEnd / D.T;
+    ctx.globalAlpha = 0.35; ctx.fillStyle = tok.fail; ctx.fillRect(a0, s.y - 3, Math.max(2, a1 - a0), 14); ctx.globalAlpha = 1;
+    text("attack", (a0 + a1) / 2, s.y - 7, { size: 11, color: tok.fail, align: "center" });
+  }
+  const px = s.x0 + w * t / (D.T - 1);
+  rrect(s.x0, s.y, px - s.x0, 8, 4); ctx.fillStyle = tok.ink2; ctx.fill();
+  ctx.beginPath(); ctx.arc(px, s.y + 4, 8, 0, Math.PI * 2); ctx.fillStyle = tok.aes; ctx.fill();
+  for (let m = 0; m <= 60; m += 10) {
+    text(`${m} min`, s.x0 + w * (m * 60) / D.T, s.y + 26, { size: 11, color: tok.muted, align: "center" });
+  }
+}
+
+// ------------------------------------------------------------------ frame
+function draw(t) {
+  ctx.fillStyle = tok.bg;
+  ctx.fillRect(0, 0, W, H);
+  drawLink(t);
+  const top = 150, colW = W / D.policies.length;
+  D.policies.forEach((P, i) => drawTank(P, t, i * colW, colW, top));
+  drawScrubber(t);
+  document.getElementById("clock").textContent = `t = ${mmss(t)}  (${t} s of ${D.T})`;
+  const st = document.getElementById("status");
+  if (inAttack(t)) {
+    st.className = "alert";
+    st.textContent = D.qberAttack >= D.limit
+      ? `Eavesdropper detected: QBER ${(D.qberAttack * 100).toFixed(1)}% > 11%, keys discarded`
+      : `Eavesdropper on the fibre: QBER ${(D.qberAttack * 100).toFixed(1)}%, fewer keys`;
+  } else {
+    st.className = "ok";
+    st.textContent = !hasAttack ? "No attack in this run"
+      : t < D.attackStart ? `Normal operation. Attack at ${mmss(D.attackStart)}` : "Attack over: new keys are arriving again";
+  }
+}
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (playing) {
+    simT += dt * speed;
+    if (simT >= D.T - 1) { simT = D.T - 1; playing = false; syncButtons(); }
+  }
+  const t = tNow();
+  stepPhotons(dt, t);
+  draw(t);
+  requestAnimationFrame(frame);
+}
+
+// ------------------------------------------------------------------ controls
+const playBtn = document.getElementById("play");
+function syncButtons() { playBtn.innerHTML = playing ? "&#10074;&#10074; Pause" : "&#9654; Play"; }
+playBtn.onclick = () => { if (simT >= D.T - 1) simT = 0; playing = !playing; syncButtons(); };
+document.getElementById("restart").onclick = () => { simT = 0; prefill(); playing = true; syncButtons(); };
+const jumpBtn = document.getElementById("jump");
+jumpBtn.disabled = !hasAttack;
+jumpBtn.onclick = () => { simT = Math.max(0, D.attackStart - 20); prefill(); playing = true; syncButtons(); };
+document.getElementById("speed").onchange = e => { speed = Number(e.target.value); };
+
+let dragging = false;
+function seekFrom(ev) {
+  const r = cv.getBoundingClientRect(), s = scrubGeom();
+  const x = ev.clientX - r.left;
+  simT = Math.max(0, Math.min(D.T - 1, (x - s.x0) / (s.x1 - s.x0) * (D.T - 1)));
+  prefill();
+}
+cv.addEventListener("pointerdown", ev => {
+  const r = cv.getBoundingClientRect();
+  if (ev.clientY - r.top > H - 60) { dragging = true; seekFrom(ev); }
+});
+window.addEventListener("pointermove", ev => { if (dragging) seekFrom(ev); });
+window.addEventListener("pointerup", () => { dragging = false; });
+
+prefill();
+syncButtons();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

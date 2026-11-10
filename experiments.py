@@ -17,8 +17,11 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 from matplotlib.ticker import ScalarFormatter
 
+from keyrate import secret_rate
 from params import Params, reversed_priority
 from policies import LABELS, NAMES
 from simulator import simulate
@@ -26,13 +29,9 @@ from simulator import simulate
 RESULTS = Path(__file__).parent / "results"
 TEST_SEEDS = range(0, 30)
 TUNE_SEEDS = range(100, 120)
-METRICS = ("failed", "failed_control", "exposed", "exposed_bits",
-           "otp_share", "otp_share_control", "otp_share_state", "otp_share_market",
-           "otp_weighted", "aes_share", "delivery_ratio",
-           "key_util", "wasted_kbit", "empty_s", "min_time_left_s",
-           "stale_s", "min_stock", "react_s", "recover_s",
-           "switches_to_aes", "switches_to_otp", "oscillations",
-           "accepted_kbit", "rejected_kbit")
+METRICS = ("failed", "failed_control", "exposed", "otp_share", "otp_share_control", "otp_share_state",
+           "otp_share_market", "otp_weighted", "aes_share",
+           "key_util", "wasted_kbit", "empty_s", "react_s", "recover_s")
 DISTANCES = (5, 10, 20, 30, 40)
 RESERVES = (5, 10, 20, 30, 60, 100, 200, 400, 800)
 SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)
@@ -41,6 +40,8 @@ SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)
 COLORS = {"ours": "#2a78d6", "fixed": "#eb6834", "qian": "#1baf7a", "otp_only": "#eda100", "aes_only": "#e87ba4"}
 MARKERS = {"ours": "o", "fixed": "s", "qian": "^", "otp_only": "D", "aes_only": "v"}
 BLUES = ("#86b6ef", "#2a78d6", "#104281")           # sequential ramp, steps 250 / 450 / 650: short -> long fibre
+CLASS_SHADES = {"control": "#104281", "state": "#2a78d6", "market": "#86b6ef"}   # darker = more important
+MODE_COLORS = ("#0ca30c", "#2a78d6", "#ec835a")      # OTP, AES-256, key reused (status colours, always labelled)
 INK, INK2, MUTED, GRID, AXIS, SURFACE = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 
 
@@ -149,23 +150,17 @@ def finish(fig, name):
 # ---------------------------------------------------------------- charts
 
 def chart_distance(rows):
-    fig, axes = plt.subplots(2, 3, figsize=(14, 7), sharex=True)
-    panels = [
-        ("failed",            "Failed messages per run",                       True),
-        ("exposed",           "Exposed messages per run (key reused)",          True),
-        ("otp_share_control", "Control messages on OTP",                       False),
-        ("otp_share_state",   "State-estimation messages on OTP",               False),
-        ("otp_share_market",  "Market messages on OTP",                         False),
-        ("wasted_kbit",       "Key bits wasted (kbit)",                         False),
-    ]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True)
+    panels = [("failed", "Failed messages per run", True), ("exposed", "Exposed messages per run (key reused)", True),
+              ("otp_share_control", "Control messages protected by OTP", False),
+              ("wasted_kbit", "Key bits wasted (kbit)", False)]
     for ax, (key, title, symlog) in zip(axes.flat, panels):
         policy_lines(ax, rows, "km", key, symlog)
         ax.set_title(title)
     for ax in axes[1]:
         ax.set_xlabel("Fibre length (km)")
         ax.set_xticks(DISTANCES)
-    for ax in axes.flat[2:5]:                 # OTP-share panels share the [0,1] scale
-        ax.set_ylim(0, 1.05)
+    axes[1][0].set_ylim(0, 1.05)
     fig.suptitle("Same traffic and a 300 s attack in every run. Policies at zero share the zero line.",
                  y=0.0, va="top", color=INK2, fontsize=9)
     legend_on_top(fig, axes[0][0])
@@ -174,18 +169,12 @@ def chart_distance(rows):
 
 
 def chart_attack(rows):
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.8), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8), sharex=True)
     policy_lines(axes[0], rows, "attack_len", "failed", symlog=True)
     axes[0].set_title("Failed messages per run")
     policy_lines(axes[1], rows, "attack_len", "otp_share_control")
-    axes[1].set_title("Control messages on OTP")
+    axes[1].set_title("Control messages protected by OTP")
     axes[1].set_ylim(0, 1.05)
-    policy_lines(axes[2], rows, "attack_len", "otp_share_state")
-    axes[2].set_title("State-estimation messages on OTP")
-    axes[2].set_ylim(0, 1.05)
-    policy_lines(axes[3], rows, "attack_len", "otp_share_market")
-    axes[3].set_title("Market messages on OTP")
-    axes[3].set_ylim(0, 1.05)
     for ax in axes:
         ax.set_xlabel("Attack length (s), 30 km fibre")
     legend_on_top(fig, axes[0])
@@ -261,6 +250,102 @@ def chart_timeline(p, seed=1):
     finish(fig, "fig_timeline.png")
 
 
+def chart_classes(rows):
+    """OTP share of each message class versus distance: fixed reserve next to our rule."""
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.9), sharey=True)
+    for ax, name in zip(axes, ("fixed", "ours")):
+        for cls, color in CLASS_SHADES.items():
+            pts = [(r["km"], r[f"otp_share_{cls}"]) for r in rows if r["policy"] == name]
+            ax.plot(*zip(*pts), color=color, marker="o", markersize=6, linewidth=2, markeredgecolor=SURFACE,
+                    markeredgewidth=1.2, label=cls.capitalize())
+            ax.annotate(cls.capitalize(), pts[-1], xytext=(6, 0), textcoords="offset points", va="center",
+                        fontsize=9, color=INK2)
+        ax.set_title(LABELS[name])
+        ax.set_xlabel("Fibre length (km)")
+        ax.set_xticks(DISTANCES)
+        ax.set_xlim(DISTANCES[0] - 2, DISTANCES[-1] + 8)
+    axes[0].set_ylabel("Share of messages sent with OTP")
+    axes[0].set_ylim(-0.03, 1.05)
+    legend_on_top(fig, axes[0])
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    finish(fig, "fig_classes.png")
+
+
+def chart_switching(p, seed=1):
+    """Our rule over one hour: the key tank on top, and per class whether OTP or AES-256 was used each second."""
+    run = simulate("ours", p, seed, record=True)
+    tl = run.timeline
+    names = [c.name for c in sorted(p.classes, key=lambda c: -c.priority)]
+    fig, (top, strip) = plt.subplots(2, 1, figsize=(10, 4.6), sharex=True, gridspec_kw={"height_ratios": [1.3, 1]})
+    for ax in (top, strip):
+        ax.axvspan(p.attack_start, p.attack_start + p.attack_len, color=GRID, zorder=0)
+    top.plot([v / 1000 for v in tl["stock"]], color=COLORS["ours"], linewidth=1.8)
+    top.set_ylabel("Key tank (kbit)")
+    top.set_title(f"Rate-aware (ours) at {p.km:.0f} km: the key tank, and the protection chosen for each class")
+    cmap = ListedColormap(MODE_COLORS)
+    strip.imshow([tl[n] for n in names], aspect="auto", cmap=cmap, vmin=0, vmax=2, interpolation="nearest",
+                 extent=(0, p.seconds, len(names) - 0.5, -0.5))
+    strip.set_yticks(range(len(names)), [n.capitalize() for n in names])
+    strip.grid(False)
+    strip.set_xlabel("Time (s). Grey band = attack: no new keys arrive")
+    handles = [Patch(color=MODE_COLORS[0], label="One-Time Pad"),
+               Patch(color=MODE_COLORS[1], label="AES-256 (fresh QKD key)")]
+    fig.legend(handles=handles, loc="upper center", ncol=2, frameon=False, labelcolor=INK2)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    finish(fig, "fig_switching.png")
+
+
+def packets_by_distance(kms=range(1, 101)):
+    """How many messages per second the QKD keys can protect with OTP, at each fibre length (no attack, no wind)."""
+    base = Params()
+    rows = []
+    for km in kms:
+        rate = secret_rate(replace(base, km=km))
+        rows.append({"km": km, "key_rate_bit_s": rate, "otp_packets_per_s": rate / base.otp_cost})
+    return rows
+
+
+def otp_limits(base=None):
+    """Longest fibre at which each class, together with every more important class, can stay fully on OTP."""
+    base = base or Params()
+    limits, wanted = [], 0.0
+    for c in sorted(base.classes, key=lambda c: -c.priority):
+        wanted += c.rate * base.traffic_scale * base.otp_cost
+        lo, hi = 0.0, 300.0
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if secret_rate(replace(base, km=mid)) >= wanted else (lo, mid)
+        limits.append((c.name, wanted / base.otp_cost, lo))
+    return limits
+
+
+def chart_packets():
+    rows = packets_by_distance()
+    save_csv("distance_packets.csv", rows)
+    limits = otp_limits()
+    save_csv("otp_limits.csv", [{"up_to_class": n, "packets_per_s_needed": need, "km_limit": km}
+                                for n, need, km in limits])
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    ax.plot([r["km"] for r in rows], [r["otp_packets_per_s"] for r in rows], color=COLORS["ours"], linewidth=2.2,
+            label="Messages per second the keys can protect with OTP")
+    ax.set_yscale("log")
+    labels = {"control": "Control only", "state": "Control + State", "market": "All three classes"}
+    for name, need, km in limits:
+        ax.axhline(need, color=INK2, linewidth=1, linestyle="--")
+        ax.text(99, need * 1.08, f"{labels[name]}: {need:.0f} msg/s", ha="right", va="bottom", fontsize=9, color=INK2)
+        ax.plot([km], [need], marker="o", markersize=8, color=INK, zorder=4)
+        ax.annotate(f"{km:.0f} km", (km, need), xytext=(0, -16), textcoords="offset points", ha="center",
+                    fontsize=9.5, fontweight="bold", color=INK)
+    ax.set_xlabel("Fibre length (km)")
+    ax.set_ylabel("Messages per second (log scale)")
+    ax.set_title("How far each class can stay on OTP (128 key bits per message, no attack)")
+    ax.set_xlim(0, 100)
+    ax.yaxis.set_major_formatter(ScalarFormatter())
+    legend_on_top(fig, ax)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    finish(fig, "fig_packets.png")
+
+
 def draw_all():
     style()
     chart_distance(load_csv("distance.csv"))
@@ -268,41 +353,9 @@ def draw_all():
     chart_tuning(load_csv("fixed_reserve_sweep.csv"), load_csv("safe_scale_sweep.csv"))
     chart_robustness(load_csv("robustness.csv"))
     chart_timeline(replace(Params(), km=30))
-
-    # Generate Figures 1 through 16 requested in Section 12
-    import plots
-    try:
-        dist_rows = load_csv("distance.csv")
-        att_rows = load_csv("attack_length.csv")
-        traf_rows = load_csv("traffic.csv")
-        wind_rows = load_csv("wind.csv")
-        prio_rows = load_csv("priority.csv")
-        fixed_rows = load_csv("fixed_reserve_sweep.csv")
-        scale_rows = load_csv("safe_scale_sweep.csv")
-
-        plots.fig1_inventory_timeline(replace(Params(), km=30))
-        plots.fig2_usage_distribution(dist_rows)
-        plots.fig3_depletion_time(dist_rows)
-        plots.fig4_delivery_ratio(dist_rows)
-        plots.fig5_high_priority_delivery(dist_rows)
-        plots.fig6_exposed_messages(dist_rows)
-        plots.fig7_rates_over_time(replace(Params(), km=30))
-        plots.fig8_switching_timeline(replace(Params(), km=30))
-        plots.fig9_attack_lifecycle(replace(Params(), km=30))
-        plots.fig10_distance_performance(dist_rows)
-        plots.fig11_traffic_performance(traf_rows)
-        plots.fig12_fluctuation_performance(wind_rows)
-        plots.fig13_attack_performance(att_rows)
-        plots.fig14_priority_sensitivity(prio_rows)
-        try:
-            stress_rows = load_csv("stress.csv")
-            plots.fig15_combined_stress(stress_rows)
-        except Exception:
-            pass
-        plots.fig16_tuning_sensitivity(fixed_rows, scale_rows)
-        print("Figures 1 through 16 successfully generated in results/")
-    except Exception as e:
-        print(f"Notice: Plot generation helper exception: {e}")
+    chart_classes(load_csv("distance.csv"))
+    chart_switching(replace(Params(), km=30))
+    chart_packets()
 
 
 # ---------------------------------------------------------------- experiments
@@ -379,30 +432,6 @@ def run_all():
 
     print("robustness to changed traffic and wind ...")
     run_robustness()
-
-    print("combined stress test (Scenario 6) ...")
-    stress_p = replace(base, km=30, traffic_scale=2.0, wind_sigma=0.2,
-                       attack_start=600, attack_len=600, attack_strength=1.0)
-    stress_rows = []
-    for name in NAMES:
-        stress_rows.append({"scenario": "combined_stress", "policy": name, **evaluate(name, stress_p, TEST_SEEDS)})
-    save_csv("stress.csv", stress_rows)
-
-    print("Qian reuse vs no-reuse comparison ...")
-    qian_rows = []
-    for km in (10, 20, 30, 40):
-        p = replace(Params(), km=km)
-        for name in ("qian", "qian_noreuse"):
-            qian_rows.append({"km": km, "policy": name, **evaluate(name, p, TEST_SEEDS)})
-    save_csv("qian_comparison.csv", qian_rows)
-
-    print("generation profile comparison (Scenario 3) ...")
-    prof_rows = []
-    for prof in ("stable", "wind", "declining", "intermittent"):
-        p = replace(base, gen_profile=prof)
-        for name in ("ours", "fixed", "otp_only", "aes_only"):
-            prof_rows.append({"gen_profile": prof, "policy": name, **evaluate(name, p, TEST_SEEDS)})
-    save_csv("fluctuation.csv", prof_rows)
 
     for r in tuned:
         print(f"{r['km']:>3} km  {r['variant']:42s} failed {r['failed']:>8.1f}  exposed {r['exposed']:>6.1f}  "

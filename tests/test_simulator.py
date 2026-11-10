@@ -72,11 +72,36 @@ def test_ours_keeps_control_on_otp_when_traffic_triples():
     assert s["otp_share_control"] > 0.95 and s["failed"] == 0
 
 
+def test_every_class_has_its_otp_share():
+    p = replace(Params(), km=2, attack_len=0, seconds=600)
+    s = simulate("ours", p, seed=5).summary
+    assert s["otp_share_control"] == s["otp_share_state"] == s["otp_share_market"] == 1.0
+
+
+def test_ours_protects_control_before_market():
+    # with too few keys for everyone, the most important class keeps OTP longest
+    s = simulate("ours", replace(Params(), km=30), seed=1).summary
+    assert s["otp_share_control"] > s["otp_share_state"] > s["otp_share_market"]
+
+
 def test_ours_spends_keys_instead_of_letting_a_full_tank_overflow():
     # supply exceeds control's need, so the spare keys must go to state messages, not be wasted
     p = replace(Params(), km=30, traffic_scale=3.0, attack_len=0)
     s = simulate("ours", p, seed=1).summary
     assert s["wasted_kbit"] < 500 and s["key_util"] > 0.95
+
+
+def test_recording_does_not_change_the_result():
+    p = replace(Params(), km=30)
+    plain = simulate("ours", p, seed=9).summary
+    run = simulate("ours", p, seed=9, record=True)
+    assert run.summary == plain
+    assert run.timeline["failed"][-1] == plain["failed"] and run.timeline["exposed"][-1] == plain["exposed"]
+    assert len(run.timeline["stock"]) == p.seconds
+    for c in p.classes:                       # the per-class running totals end at the summary's totals
+        assert run.timeline[f"{c.name}_sent"][-1] >= run.timeline[f"{c.name}_otp"][-1]
+    last_share = run.timeline["control_otp"][-1] / run.timeline["control_sent"][-1]
+    assert last_share == pytest.approx(plain["otp_share_control"])
 
 
 def test_same_seed_gives_identical_runs():
@@ -88,87 +113,3 @@ def test_all_policies_see_the_same_traffic():
     p = replace(Params(), km=30)
     sent = {simulate(n, p, seed=4).summary["sent"] for n in NAMES}
     assert len(sent) == 1
-
-
-# --- new tests for spec requirements added in this revision ---
-
-def test_per_class_otp_shares_present_in_summary():
-    """Spec requires OTP share per class; all three class keys must appear."""
-    p = replace(Params(), km=5, attack_len=0)   # short link: plenty of keys so all classes use OTP
-    s = simulate("ours", p, seed=1).summary
-    for key in ("otp_share_control", "otp_share_state", "otp_share_market"):
-        assert key in s, f"{key} missing from summary"
-    # at 5 km with no attack the tank never empties; every class must be on OTP the whole time
-    assert s["otp_share_control"] == pytest.approx(1.0)
-    assert s["otp_share_state"]   == pytest.approx(1.0)
-    assert s["otp_share_market"]  == pytest.approx(1.0)
-
-
-def test_min_time_left_in_summary():
-    """Spec requires 'time to empty' as a reported metric."""
-    p = replace(Params(), km=30)
-    s = simulate("ours", p, seed=1).summary
-    assert "min_time_left_s" in s
-    # min_time_left must be a non-negative finite number (the tank did drain somewhat)
-    assert s["min_time_left_s"] >= 0.0
-
-
-def test_min_time_left_is_inf_when_supply_always_exceeds_demand():
-    """When the key rate beats OTP demand the tank never drains: time_left is always inf."""
-    # 2 km fibre: ~27 kbit/s supply vs 10,240 bit/s demand → never draining
-    p = replace(Params(), km=2, attack_len=0, deterministic=True, seconds=200)
-    s = simulate("otp_only", p).summary
-    assert s["min_time_left_s"] == float("inf")
-
-
-def test_otp_weighted_between_per_class_extremes():
-    """Weighted OTP share must lie between the minimum and maximum per-class shares."""
-    p = replace(Params(), km=30)
-    s = simulate("ours", p, seed=2).summary
-    shares = [s["otp_share_control"], s["otp_share_state"], s["otp_share_market"]]
-    assert min(shares) <= s["otp_weighted"] <= max(shares) + 1e-9
-
-
-def test_qian_noreuse_variant_never_exposes_messages():
-    """Spec Section 4: Qian-style tiers without key reuse isolates allocation from exposure."""
-    p = replace(Params(), km=30)
-    s_reuse = simulate("qian", p, seed=2).summary
-    s_noreuse = simulate("qian_noreuse", p, seed=2).summary
-    assert s_reuse["exposed"] > 0
-    assert s_noreuse["exposed"] == 0
-    assert s_noreuse["exposed_bits"] == 0
-    # Instead of exposing keys, shortfall results in failed messages
-    assert s_noreuse["failed"] >= s_reuse["failed"]
-
-
-def test_adaptation_and_switching_metrics():
-    """Spec Section 9: Adaptation metrics like switches and dwell times must be tracked."""
-    p = replace(Params(), km=30)
-    s = simulate("ours", p, seed=1).summary
-    assert "switches_to_aes" in s
-    assert "switches_to_otp" in s
-    assert "oscillations" in s
-    assert "delivery_ratio" in s
-    assert s["delivery_ratio"] == pytest.approx(1.0)
-    assert s["switches_to_aes"] >= 0
-    assert s["switches_to_otp"] >= 0
-
-
-def test_rejected_and_accepted_keys_under_attack():
-    """Spec Section 9: Accepted and rejected key bits must be tracked separately."""
-    p = replace(Params(), km=30, attack_len=300)
-    s = simulate("ours", p, seed=1).summary
-    assert s["accepted_kbit"] > 0
-    assert s["rejected_kbit"] > 0   # Keys rejected during 300 s attack
-
-
-def test_rate_aware_min_dwell_prevents_rapid_switching():
-    """Spec Section 4: Min dwell time prevents rapid cycling back to OTP."""
-    p_nodwell = replace(Params(), km=30, min_dwell_s=0)
-    p_dwell = replace(Params(), km=30, min_dwell_s=30)
-    s_nodwell = simulate("ours", p_nodwell, seed=3).summary
-    s_dwell = simulate("ours", p_dwell, seed=3).summary
-    # Enforcing 30s dwell can only reduce or equal rapid oscillations
-    assert s_dwell["oscillations"] <= s_nodwell["oscillations"]
-
-
