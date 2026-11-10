@@ -5,19 +5,34 @@ secret key bits to a key tank and grid messages use them. The simulator compares
 a message should use a One-Time Pad (OTP) and when it should fall back to AES-256 with a fresh QKD key,
 including during an eavesdropping attack that stops key generation.
 
-The full write-up (papers, methods, results, limitations) is in [docs/Minor_Project_Overview.pdf](docs/Minor_Project_Overview.pdf).
+The full write-up (papers, methods, results, limitations) is in [docs/Project_Report.pdf](docs/Project_Report.pdf).
+
+## Online dashboard
+
+**Live dashboard: https://qkd-key-policy.streamlit.app**
+
+The dashboard runs in the browser without installing anything (Streamlit Community Cloud). It runs the same
+simulator as the code below. If the page says the app is asleep, press the button to wake it up; it starts in
+about a minute.
 
 ## Run it
 
-Needs Python 3.10 or newer.
+Needs Python 3.10 to 3.12.
 
 ```
 pip install -r requirements.txt
+run.bat                    # the dashboard: double-click it, or run  python -m streamlit run app.py
 python run_one.py          # five policies, one run, 30 km fibre: prints a table (1 second)
 python run_one.py 40       # same at 40 km
-python -m pytest           # 29 automated checks
+python -m pytest           # 32 automated checks
 python experiments.py      # every experiment, 30 runs each: CSV tables and charts in results/ (1-2 minutes)
 ```
+
+The dashboard has five tabs: a live animation of the five key tanks with the eavesdropper on the fibre,
+the numbers of the current run (OTP share of every message class), the experiment charts, an explanation, and
+a real OTP / AES-256 encryption of a grid command (including why a one-time pad must never be reused).
+The fibre-length slider (1 to 100 km) also shows how many messages per second the keys can protect with OTP,
+and for which classes that is enough.
 
 ## Files
 
@@ -32,6 +47,9 @@ python experiments.py      # every experiment, 30 runs each: CSV tables and char
 | `metrics.py` | Failed and exposed messages, OTP shares, wasted keys | Qian, Zheng Eq. 2 |
 | `experiments.py` | All scenarios; thresholds tuned on 20 runs, results reported on 30 other runs | |
 | `run_one.py` | Quick table for one distance | |
+| `app.py` | The dashboard (Streamlit): sliders, tabs, real encryption demo | |
+| `animation.py`, `web/animation.html` | The live animation of the five key tanks (plain HTML canvas, works offline) | |
+| `run.bat` | Starts the dashboard and opens it in the browser | |
 | `tests/` | Automated checks, e.g. key bits are conserved and OTP-only empties after 45 s as calculated by hand | |
 | `results/` | CSV tables and charts produced by `experiments.py` | |
 
@@ -43,7 +61,8 @@ python experiments.py      # every experiment, 30 runs each: CSV tables and char
 4. **Qian-style tiers**: keys by priority; when keys are scarce one key is shared by two messages (counted as exposed).
 5. **Rate-aware (ours)**: for each class, predict the seconds until the tank is empty, counting only that class and
    more important ones; below the class's safe time (control 20 s, state 60 s, market 120 s) send it with AES-256.
-   Always keep enough bits for one AES key, use OTP when the tank is nearly full, never reuse keys.
+   OTP may never spend the 512 bits kept for the next AES key; the tank uses OTP when nearly full; keys are never
+   reused.
 
 ## Honest notes
 
